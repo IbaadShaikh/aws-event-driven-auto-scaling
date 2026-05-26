@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Auto Scaling Group driven by SQS queue depth using CloudWatch alarms and dashboard.
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID from networking stack
+  PublicSubnet1Id:
+    Type: String
+    Description: Public subnet 1 ID from networking stack
+  PublicSubnet2Id:
+    Type: String
+    Description: Public subnet 2 ID from networking stack
+  InstanceSecurityGroupId:
+    Type: String
+    Description: Security group ID for instances
+  SqsQueueName:
+    Type: String
+    Description: Name of the SQS queue to monitor
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: SSM parameter for latest Amazon Linux 2023 AMI
+
+Resources:
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: sqs-autoscaling-launch-template
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: t3.micro
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroupId
+        UserData: !Base64 |
+          #!/bin/bash
+          dnf update -y
+          dnf install -y httpd
+          systemctl enable httpd
+          systemctl start httpd
+          echo "Hello from SQS Auto Scaling instance on $(hostname -f)" > /var/www/html/index.html
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '4'
+      DesiredCapacity: '1'
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-instance
+          PropagateAtLaunch: true
+
+  ScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      Cooldown: 60
+
+  ScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: -1
+      Cooldown: 300
+
+  QueueDepthHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "SQS-HighDepth-${SqsQueueName}"
+      AlarmDescription: "Scale OUT when SQS queue depth is high"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref SqsQueueName
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref ScaleOutPolicy
+
+  QueueDepthLowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "SQS-LowDepth-${SqsQueueName}"
+      AlarmDescription: "Scale IN when SQS queue depth is low"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref SqsQueueName
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref ScaleInPolicy
+
+  # NEW: CloudWatch Dashboard
+  CloudWatchDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "sqs-autoscaling-dashboard-${AWS::StackName}"
+      DashboardBody:
+        !Sub
+        - |
+          {
+            "widgets": [
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 0,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "metrics": [
+                    [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${SqsQueueName}" ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "stat": "Average",
+                  "period": 60,
+                  "title": "SQS Queue Depth (${SqsQueueName})"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 0,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "metrics": [
+                    [ "AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", "${AutoScalingGroupName}" ],
+                    [ ".", "GroupDesiredCapacity", ".", "." ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "stat": "Average",
+                  "period": 60,
+                  "title": "ASG Capacity (${AutoScalingGroupName})"
+                }
+              }
+            ]
+          }
+        - { AutoScalingGroupName: !Ref AutoScalingGroup }
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling group
+    Value: !Ref AutoScalingGroup
+  LaunchTemplateId:
+    Description: ID of the launch template
+    Value: !Ref LaunchTemplate
+  DashboardName:
+    Description: CloudWatch dashboard name
+    Value: !Ref CloudWatchDashboard

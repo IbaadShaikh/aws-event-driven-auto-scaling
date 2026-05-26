@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudTrail trail and S3 bucket for SQS autoscaling exercise.
+
+Parameters:
+  CloudTrailBucketName:
+    Type: String
+    Description: Globally unique S3 bucket name for CloudTrail logs (e.g., yourname-cloudtrail-logs-1234)
+
+Resources:
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref CloudTrailBucketName
+      VersioningConfiguration:
+        Status: Enabled
+
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !Sub 'arn:aws:s3:::${CloudTrailBucket}'
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub 'arn:aws:s3:::${CloudTrailBucket}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': 'bucket-owner-full-control'
+                'aws:SourceArn': !Sub 'arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/sqs-autoscaling-trail'
+
+  SqsAutoscalingTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailBucketPolicy
+    Properties:
+      TrailName: sqs-autoscaling-trail
+      S3BucketName: !Ref CloudTrailBucket
+      IncludeGlobalServiceEvents: true
+      IsMultiRegionTrail: true
+      EnableLogFileValidation: true
+      IsLogging: true
+      EventSelectors:
+        - ReadWriteType: All
+          IncludeManagementEvents: true
+
+Outputs:
+  TrailName:
+    Description: Name of the CloudTrail trail
+    Value: !Ref SqsAutoscalingTrail
+  CloudTrailBucket:
+    Description: S3 bucket used for CloudTrail logs
+    Value: !Ref CloudTrailBucket

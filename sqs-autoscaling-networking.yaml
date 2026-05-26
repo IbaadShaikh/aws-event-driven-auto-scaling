@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Networking, SNS Topic, and SQS Queue for SQS-driven Auto Scaling exercise.
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for public subnet 1
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR block for public subnet 2
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1Cidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Sub '${AWS::Region}a'
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-public-subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2Cidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Sub '${AWS::Region}b'
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-public-subnet-2
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH and HTTP
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: sqs-autoscaling-sg
+
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: SQS-Autoscaling-Topic
+
+  SqsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sqs-autoscaling-queue
+      VisibilityTimeout: 60
+
+  SqsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SqsQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Allow-SNS-SendMessage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt SqsQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref SnsTopic
+
+  SnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref SnsTopic
+      Protocol: sqs
+      Endpoint: !GetAtt SqsQueue.Arn
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+  PublicSubnet1Id:
+    Description: Public subnet 1 ID
+    Value: !Ref PublicSubnet1
+  PublicSubnet2Id:
+    Description: Public subnet 2 ID
+    Value: !Ref PublicSubnet2
+  InstanceSecurityGroupId:
+    Description: Security group ID for EC2 instances
+    Value: !Ref InstanceSecurityGroup
+  SqsQueueName:
+    Description: Name of the SQS queue
+    Value: !Ref SqsQueue
+  SqsQueueUrl:
+    Description: URL of the SQS queue
+    Value: !Ref SqsQueue
+  SqsQueueArn:
+    Description: ARN of the SQS queue
+    Value: !GetAtt SqsQueue.Arn
+  SnsTopicArn:
+    Description: ARN of the SNS Topic
+    Value: !Ref SnsTopic
+  

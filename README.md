@@ -6,8 +6,6 @@ This project demonstrates an event-driven auto scaling architecture built on AWS
 
 The environment automatically scales EC2 worker instances based on SQS queue depth. Messages are published to an SNS topic, delivered to an SQS queue, and CloudWatch alarms trigger scaling policies within the Auto Scaling Group.
 
-This project was developed as part of ENPM818N Cloud Computing at the University of Maryland.
-
 ---
 
 ## Technologies Used

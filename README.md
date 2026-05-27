@@ -82,9 +82,7 @@ aws-event-driven-auto-scaling/
 │   ├── scaling-dashboard.png
 │   ├── autoscaling-group.png
 │   └── cloudtrail-events.png
-│
-└── docs/
-    └── Event_Driven_Auto_Scaling_Report.pdf
+
 ```
 
 ---
